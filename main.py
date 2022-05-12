@@ -1,459 +1,556 @@
 from cmu_cs3_graphics import *
 import math, random, copy
 from PIL import Image
+from collections import deque
+import sys
+ 
+
+sys.setrecursionlimit(10**6)
 
 from classes import *
 from drawings import *
 from constants import *
 
+from mapGeneration import *
+from pathFinder import *
+from helpers import *
+
+
 def onAppStart(app):
-
-    # Map variables
-    app.mapView = True
-    app.hexSize = HEXSIZE
-    app.mapPercentOfScreen = HEXMAPPERCENTOFSCREEN
-
-
-    # What percent of times have resources and how good the resources are
-    app.resourceAbundance = random.randint(40,60)
-    app.resources = ['ATP','Protein','Glucose']
-
-    # Cellular automata generation
-    app.originalHexMap = generateHexMap(app,app.hexSize)
-    app.mapDensity = 70
-    app.iterations = 8
-    app.hexTiles = applyAutomata(app.originalHexMap,app.mapDensity,app.iterations)
-    # app.hexTiles = app.originalHexMap
-
-    # Pick random position to place player's first cell
-    # app.playerOwnedHexes = set([app.hexTiles[random.randint(0,len(app.hexTiles)-1)][random.randint(0,len(app.hexTiles[0])-1)]])
-    app.playerOwnedHexes = [app.hexTiles[5][3]]
-   
-    # Cell variables
-    app.cellRows, app.cellCols = 3,3
-    app.cellMargin = 500
-    app.cellGridWidth = app.width - (app.cellMargin * 2)
-    app.cellGridHeight = app.height - (app.cellMargin*2)
-
-    # app.tileWidth = app.cellGridWidth/ len(app.cellTiles)
-    app.tileWidth = TILEWIDTH
-    app.tileHeight = app.tileWidth
-
-    app.cellTiles = generateCellTiles(app)
+    app.setMaxShapeCount(20000)
+    app.stepsPerSecond = 1
 
     # Game variables
-    app.paused = False
+    app.mapView = True
+    app.pauseGame = True
+    app.gameStarted = False
+    app.gameOver = False
+    app.gameWon = False
+    app.currScreen = 'splashScreen'
+    app.playerName = 'Player'
+    app.homeButtons = initializeHomeButtons(app)
+    app.settingsButtons = initializeSettingsButtons(app)
+    app.instructionButtons = initializeInstructionButtons(app)
+    app.speedMode = False # Faster resource accumulation for testing. Press t
+    
+    # Notifications
+    app.updatedStatsNotif = None
+    app.placementFailedNotif = None
+    app.notif = None
+    app.notifDisplayTime = 3 # seconds
+    app.showExtraInfo = False 
+    app.showHexStats = None
+    app.notifTimerFired = 0
 
-def onMouseMove(app,mouseX,mouseY):
-    return
-    if app.mapView: 
-        highlightHexes(app,mouseX,mouseY)
-    else: 
-        highlightCells(app,mouseX,mouseY)
+    # Default Map variables
+    app.hexSize = HEXSIZE
+    app.mapPercentOfScreen = HEXMAPPERCENTOFSCREEN
+    app.mapDensity = MAPDENSITY
+    app.iterations = AUTOMATAITERATIONS
+    app.hexAreaGrowthRate = 30 # seconds
 
-def highlightHexes(app,mouseX,mouseY):
-    for hexList in app.hexTiles:
-        for hex in hexList:
-            hex.highlighted = True if hex.isWithinBounds(mouseX,mouseY) else False
+    # Default resource variables
+    app.resourceAbundance = random.randint(40,60)
+    app.resources = ['ATP','Protein','Glucose']
+    app.maxCellAreaRange = 5
+        
+    # Default virus variables
+    app.virusNum = 1  # No of viruses on board
+    app.virusRespawnRate = VIRUSRESPAWNRATE
+    app.showVirusStats = False
+    app.timerFired = 0
 
-def highlightCells(app,mouseX,mouseY):
-    for cellTilesList in app.cellTiles:
-        for cellTile in cellTilesList:
-            # print(cellTile.size)
-            cellTile.highlighted = True if cellTile.isWithinBounds(mouseX,mouseY) else False
+    # Map and game variables to be initialized
+    app.hexMap = None
+    app.currCellIdx = 0
+    app.playerCells = None
+    app.organelleOptions = None
+    app.currPlacingOrganelle = None
+
+    app.meitosisCell = None
+    app.meitosisView = False
+    app.showMeitosisCostToPoint = None
+    app.meitosisProteinReq = 100 # 10 seconds
+    app.meitosisATPreq = 30
+
+    app.viruses = None
+    app.showVirusResources = []
+    app.mapFill = None
 
 
 def onKeyPress(app,key):
+    if key =='r':
+        onAppStart(app)
+    if app.gameOver: return
+    
     if key == 'm':
         app.mapView = True
     elif key == 'c':
-        app.mapView = False
+        app.mapView = False        
     elif key == 'p':
-        app.paused = not app.paused
+        app.pauseGame = not app.pauseGame
+    elif key == 's':
+        app.showExtraInfo = not app.showExtraInfo
+        currCell = getCurrCell(app)
+        currCell.showStats = app.showExtraInfo
+    elif key == 'v':
+        app.showVirusStats = not app.showVirusStats
+    elif key == 't':
+        app.speedMode = not app.speedMode
+        if app.speedMode: 
+            app.notif = 'S U P E R  S P E E D  M O D E ( O N )'
+        else:
+            app.notif = 'S U P E R  S P E E D  M O D E ( O F F )' 
+
     # Implement zoom functionality
     elif key =='=':
         app.mapPercentOfScreen += 0.1
     elif key =='-':
         app.mapPercentOfScreen -= 0.1
 
-def onMousePress(app,mouseX,mouseY):
+    # Cycle through cells with left and right arrow keys
+    if app.mapView == False: 
+        if key == 'right':
+            app.currCellIdx = min(len(app.playerCells)-1,app.currCellIdx+1)
+        elif key == 'left':
+            app.currCellIdx = max(0,app.currCellIdx-1)
+
+
+def onStep(app):
+
+    if app.gameOver or not app.gameStarted: 
+        return
+
+    app.notifTimerFired += 1
     
-    
+    # Notification delay
+    if app.notifTimerFired % app.notifDisplayTime == 0: 
+        app.updatedStatsNotif = None
+        app.placementFailedNotif = None
+        app.notif = None
+
+    if app.pauseGame: return
+
+    app.timerFired += 1
+    # Add new virus
+    if app.timerFired % app.virusRespawnRate == 0:
+        app.viruses.extend(initializeViruses(app))
+
+    if app.timerFired % app.hexAreaGrowthRate == 0: 
+        for cell in app.playerCells:
+            cell.hexRange += 1
+            cell.updateAreaOwned(app.hexMap)
+            
+
+    # Increment cell resources 
+    currCell = getCurrCell(app)
+    for cell in app.playerCells: 
+        for organelle in cell.organelles: 
+            if isinstance(organelle,golgiBody): # Make golgi body reduce time
+                continue
+            timer = 1 if app.speedMode else organelle.timer
+            if app.timerFired % timer == 0:
+                cell.incrementResources()    
+
     if app.mapView: 
-        
-        # Check position they clicked and zoom in if its their own cell
-        for playerHex in app.playerOwnedHexes:
-            if playerHex.isWithinBounds(mouseX,mouseY):
-                app.mapView = False
-                break
-
-        clickedHex = None
-        for hexList in app.hexTiles:
-            for hex in hexList: 
-                if hex.isWithinBounds(mouseX,mouseY):
-                    clickedHex = hex
-                    break
-
-        print("BEST MANHATTAN DIST",clickedHex.getManhattanDistance(app.playerOwnedHexes[0]))
-        bestPath = findBestPath(app,clickedHex, app.playerOwnedHexes[0])
-        for hexList in app.hexTiles:
-            for hex in hexList:
-                hex.highlighted = True if hex in bestPath else False
-
-
-# A* pathfinding algorithm
-# Returns best path in hexagonal grid from starting hex to destination hex
-# Learned from: https://en.wikipedia.org/wiki/A*_search_algorithm
-def findBestPath(app,startHex,targetHex):
+        # Kill dead viruses, move viruses.
+        updateViruses(app)
     
-    G = 0 # Movement cost from starting point to current tile
-    H = startHex.getManhattanDistance(targetHex) # Estimated distance to target point
-    F = G + H 
-    visited = []
+        # Show hexes that can perform meitosis
+        for cell in app.playerCells: 
+            if cellCanPerformMeitosis(app,cell):
+                cell.hex.meitosis = True
 
-    # Add starting tile  to open list
-    openList = [] # Tuple of hex and important information for tile weighting
-    return findBestPathHelper(app,startHex,G,F,openList,visited,targetHex)
+    # else: # Cell view specific timer events 
+    #    if cellCanPerformMeitosis(app,cell):
 
-def findBestPathHelper(app,currHex,currG,currF,openList,visited,targetHex):
-    while pathFound(targetHex,visited) == False: 
-        visited.append(currHex)
-        adjacentHexes = getViableAdjacentHexes(app,currHex,visited)
-        for adjHex in adjacentHexes:
+    if playerControllsAllHexes(app):
+        app.gameWon = True
 
-            # adjHexG = currG + 1
-            adjHexG = currG + calculateHexWeighting(adjHex)
-            adjHexH = adjHex.getManhattanDistance(targetHex)
-            adjHexF = adjHexG + adjHexH
-            # if currF < adjHexF:
-            #     # visited.append(adjHex)
-            #     openList.append((adjHex,adjHexG,adjHexH,adjHexF))
-                # if not hexInTupleList(adjHex,openList):
-            openList.append((adjHex,adjHexG,adjHexH,adjHexF))
+        
 
-        # print("OPENLIST",openList)
-        # print("VISITED",visited)
-        currHexIdx = getBestHexInfo(openList,targetHex) 
-        currHex, currG, currH, currF = openList[currHexIdx]
-        openList = []
+def onMouseMove(app,mouseX,mouseY):
+    # Highlight Home buttons
+    if app.currScreen == 'splashScreen':
+        for button in app.homeButtons: 
+            if button.pointIntersectsButton(mouseX,mouseY):
+                button.highlighted = True
+            else: 
+                button.highlighted = False
+            
+    if not app.gameStarted: 
+        return
 
-    return visited
- 
-def calculateHexWeighting(hex): 
-    if hex.resource == '':
-        return 4
-    elif hex.resource == 'ATP':
-        return 1
+    # Show Cost of meitosis
+    if app.meitosisView: 
+        # Tuple of hex player mouse is on and cost to hex
+        meitosisCost = getMeitosisCost(app.meitosisCell.hex,mouseX,mouseY)
+        app.showMeitosisCostToPoint = (meitosisCost,(mouseX,mouseY))
     else: 
-        return 2
-def hexInTupleList(hex,tupleList):
-    for tuple in tupleList: 
-        checkHex = tuple[0]
-        if hex == checkHex: 
-            return True
-    return False
+        app.showMeitosisCostToPoint = None
 
-# Returns all adjacent hexes that are visible/part of the map
-def getAdjacentHexes(hexTiles,currHex):
-    adjacentHexes = []
-    for hexList in hexTiles:
-        for hex in hexList:
-            xCoord, yCoord, zCoord = hex.xCoord, hex.yCoord, hex.zCoord
-            targXcoord, targYcoord, targZcoord = currHex.xCoord, currHex.yCoord, currHex.zCoord
-            # Top left
-            if xCoord == targXcoord and yCoord == targYcoord+1 and zCoord == targZcoord-1:
-                adjacentHexes.append(hex)
-            # Top right
-            elif xCoord == targXcoord-1 and yCoord == targYcoord+1 and zCoord == targZcoord:
-                adjacentHexes.append(hex)
-            # Right
-            elif xCoord == targXcoord+1 and yCoord == targYcoord and zCoord == targZcoord-1:
-                adjacentHexes.append(hex)
-            # left
-            elif xCoord == targXcoord-1 and yCoord == targYcoord and zCoord == targZcoord+1:
-                adjacentHexes.append(hex)
-            # bottom left    
-            elif xCoord == targXcoord and yCoord == targYcoord-1 and zCoord == targZcoord+1:
-                adjacentHexes.append(hex) 
-            # bottom right
-            elif xCoord == targXcoord+1 and yCoord == targYcoord-1 and zCoord == targZcoord:
-                adjacentHexes.append(hex)  
-    return adjacentHexes
+    if app.mapView: 
+        # Show Hexes stats (resources they have)
+        if app.showExtraInfo: 
+            app.showHexStats = showHexStats(app,mouseX,mouseY)
+        else:
+            app.showHexStats = None
+    else: 
+        currCell = getCurrCell(app)
 
-def getViableAdjacentHexes(app,currHex,visited):
-    viableAdjacentHexes = getAdjacentHexes(app.hexTiles,currHex)
-    i = 0
-    while i < len(viableAdjacentHexes):
-        adjHex = viableAdjacentHexes[i]
-        if adjHex.visible == False or adjHex in visited: 
-            viableAdjacentHexes.pop(i)
+        # Draw Organelle shadow
+        if app.currPlacingOrganelle != None: 
+            # if currCell.isWithinBounds(mouseX,mouseY):
+            app.currPlacingOrganelle.moveOrganelleShadow(mouseX,mouseY)
+
+        # Show organelle specific stats
+        if app.showExtraInfo: 
+            showOrganelleInfo(app.organelleOptions,currCell,mouseX,mouseY)
         else: 
-            i += 1
-    return viableAdjacentHexes
-  
-def pathFound(targetHex,visited):
-    return targetHex in visited
+            hideOrganelleInfo(app.organelleOptions,currCell)
 
-# Gets hex and required info with lowest movement close and closest distance to target
-# Returns the tile with the lowest f value
-def getBestHexInfo(openList,targetHex):
-    bestF = None
-    idx = 0
-    for i in range(len(openList)): 
-        hexInfo = openList[i]
-        currHex = hexInfo[0]
-        if currHex == targetHex: 
-            return i
-        currF = hexInfo[3]
-        if bestF == None or currF < bestF:
-            bestF = currF
-            idx = i
-    return idx
 
-def onMouseDrag(app,mouseX,mouseY):
-    pass
+def onMousePress(app,mouseX,mouseY):
+    if not app.gameStarted:
+        if app.currScreen == 'splashScreen':
+            for button in app.homeButtons:
+                if button.pointIntersectsButton(mouseX,mouseY):
+                    button.performAction(app) # Play button starts game and initializes stuff
+                    if button.action == 'play':
+                        app.gameStarted = True
+                        app.loadingScreen = True
+                        initializeMapAndGame(app)
+
+        elif app.currScreen == 'settings':
+            for settingsButton in app.settingsButtons: 
+                if type(settingsButton) == Button: # Return to home screen button
+                    if settingsButton.pointIntersectsButton(mouseX,mouseY):
+                        settingsButton.performAction(app)
+                else: 
+                    settingsButton.performAction(app,mouseX,mouseY)
+        elif app.currScreen == 'instructions':
+            for instructionButton in app.instructionButtons:
+                if instructionButton.pointIntersectsButton(mouseX,mouseY):
+                    instructionButton.performAction(app)
+                                   
+    else:
+        if app.mapView:
+            app.mapFill = getMapFill(app.hexMap)
+            clickedHex = getClickedHex(app.hexMap,mouseX,mouseY)
+
+            # FLOOD FILL REGION CLICKED TEST
+            # floodFillTest(app.hexMap,clickedHex)
+
+            if clickedHex.visible == False:
+                return
+
+            # Performing meitosis
+            if app.meitosisCell != None: 
+                performMeitosis(app,clickedHex,mouseX,mouseY) 
+
+            # Trying to do meitosis
+            if clickedHex.meitosis:
+                for cell in app.playerCells: 
+                    if cell.hex == clickedHex: 
+                        app.meitosisCell = cell
+                        app.meitosisView = True
+
+            # Zoom in player's cell
+            if app.meitosisCell == None: 
+                for playerCell in app.playerCells:
+                    if playerCell.hex.isWithinBounds(mouseX,mouseY):
+                        app.currCellIdx = playerCell.idx
+                        app.mapView = False
+                        return
+
+            app.mapFill = getMapFill(app.hexMap)
+
+            # PATH FINDER TEST
+            # # bestPath = findBestPath(app,clickedHex, pickRandomPlayerHex(app))
+            # bestPath = findBestPath(app,clickedHex,app.playerCells[0].hex)
+            # for hex in app.hexMap:
+            #     hex.highlighted = True if hex in bestPath else False
+
+        else: # MADE ACTION IN CELL
+            
+            currCell = getCurrCell(app)
+
+            # Attempting to place an organelle
+            if app.currPlacingOrganelle != None:
+                if not currCell.isWithinBounds(mouseX,mouseY): 
+                    app.currPlacingOrganelle = None
+                    return
+                organelle = app.currPlacingOrganelle
+                placementCost = organelle.placementCost
+                failureReason = placeOrganelle(currCell,app.currPlacingOrganelle)
+                if failureReason != None: 
+                    app.placementFailedNotif = failureReason
+                    app.updatedStatsNotif = None
+
+                # Reduce speed of all other organelles if golgi placed
+                if isinstance(app.currPlacingOrganelle,golgiBody):
+                    for organelle in currCell.organelles: 
+                        organelle.timer = max(1,organelle.timer-app.currPlacingOrganelle.upgradeLevel)
+
+                app.currPlacingOrganelle = None
+
+                # CHANGE RESOURCE LATERRR
+                app.updatedStatsNotif = (organelle.x,organelle.y,'ATP',placementCost)
+                
+
+            # Picked an organelle to place
+            for organelleOption in app.organelleOptions: 
+                if organelleOption.isWithinBounds(mouseX,mouseY):
+                    app.currPlacingOrganelle = copy.deepcopy(organelleOption)
+
+
+            for organelle in currCell.organelles: 
+                if organelle.clicked and isinstance(organelle,Nucleus): 
+                    organelle.performClickedAction(app,currCell,mouseX,mouseY)
+
+            # Clicked on organelle in cell
+            if currCell.isWithinBounds(mouseX,mouseY):
+                for organelle in currCell.organelles: 
+                    if organelle.isWithinBounds(mouseX,mouseY):
+                        organelle.clicked = not organelle.clicked
+                        # organelle.performClickedAction(app)
 
 
 def redrawAll(app):
-    if app.mapView:
-        drawHexMap(app)
-    else:
-        drawCellView(app) # Isometric drawing of current player cell
-        # drawVirus(app.width/2,app.height/2,20)
-        # drawCircle(app.width/2,app.height/2,200)
+    if not app.gameStarted: 
+        drawCurrScreen(app)
+    else: 
+        drawGrayBackground(app)
+        # if app.loadingScreen():
+        #     drawLoadingScreen(app)
+        if app.gameOver: 
+            drawGameOverScreen(app)
+            return
+        if app.gameWon: 
+            drawGameWonScreen(app)
+            return
+        if app.mapView:
+            drawHexMap(app)
+        else:      
+            drawCellView(app)
 
-    drawUi(app) 
+        drawUi(app) 
 
 def drawHexMap(app):
-    drawGrayBackground(app)
-    for i in range(len(app.hexTiles)):
-        hexList = app.hexTiles[i]
-        for j in range(len(hexList)):
-            hex = hexList[j]
-            if hex in app.playerOwnedHexes: 
-                hex.playerOwned, hex.visible = True, True
-
-            hex.drawHexagon(app)
-
-
- 
-# Hexagonal structure learned from
-# https://www.youtube.com/watch?v=wZXW_nzJotc&t=460s
-# Draws hexagonal map
-# Made it work with CMu graphics and used classes
-# coordinate system learned from this guide: 
-# https://www.redblobgames.com/grids/hexagons/implementation.html
-
-def generateHexMap(app,hexSize):
-    hexTiles = []
-
-    gridWidth = app.mapPercentOfScreen * app.width
-    gridHeight= app.mapPercentOfScreen * app.height
-
-    xOffset = 1.7 * hexSize
-    yOffset = hexSize * 1.5
-
-    # Number of hexagons in x and y direction
-    rows = int(gridHeight / yOffset) + 1 
-    cols = int(gridWidth / xOffset) + 1
+    for hex in app.hexMap:
+        if playerOwnedHex(hex,app.playerCells): 
+            hex.playerOwned, hex.visible = True, True
+        hex.drawHexagon(app)
     
-    currX = app.width/2.0 - gridWidth/2.0
-    currY = app.height/2.0 - gridHeight/2.0
+    if app.showMeitosisCostToPoint != None: 
+        cost = app.showMeitosisCostToPoint[0]
+        mx, my = app.showMeitosisCostToPoint[1]
+        drawMeitosisCost(cost,mx,my)
 
-    xCoord, yCoord, zCoord = 0,0,0
-    startxCoord = 0
-    for row in range(rows):
-        rowList = []
-        yCoord = row *-1
-        if (row % 2 == 1): # Slide over hex starting point in ever other row
-            currX += hexSize - (0.15 * hexSize)
-            startxCoord += 1
-            
-        for col in range(cols):
-            xCoord = col + startxCoord
-            zCoord = getZCoord(xCoord,yCoord)
-
-            hex = Hexagon(currX,currY,hexSize,xCoord,yCoord,zCoord)
-            resource, amount, = getResourceAndAmount(app)
-            hex.setResources(resource,amount)
-
-            rowList.append(hex)
-
-            currX += xOffset
-        hexTiles.append(rowList)
+    # Show hex stats
+    if app.showHexStats != None: 
+        app.showHexStats.showResources()
         
-        # Reset x to leftmost position
-        currX = app.width/2.0 - gridWidth/2.0
-        currY += yOffset
-
-    return hexTiles
-
-# Gets the z coordinate of hexagon in axial plane
-def getZCoord(xCoord,yCoord):
-    return -xCoord-yCoord
-
-
-# CELLULAR AUTOMATA
-# Uses cellular automata on hex tiles
-def applyAutomata(originalHexMap,mapDensity,iterations):
-
-    hexNoiseMap = generateHexNoiseMap(originalHexMap,mapDensity)
-
-    # Ceullar automata generation
-    for iter in range(iterations): 
-        newMap = copy.deepcopy(hexNoiseMap)
-        for row in range(len(hexNoiseMap)):
-            for col in range(len(hexNoiseMap[row])):
-                # 1 is passage, 0 is wall
-                # Get neighbors
-                visibleNeighbors = getNoOfVisibleNeighbors(hexNoiseMap,row,col)
-                currOldCell = hexNoiseMap[row][col]
-                currNewCell = newMap[row][col]
-                # Rule set from notes:  
-                # https://www.cs.cmu.edu/~112/notes/student-tp-guides/Terrain.pdf
-                # print(visibleNeighbors)
-                if currOldCell.visible:
-                    if visibleNeighbors < 3: 
-                        currNewCell.visible = False
-                    else: 
-                        currNewCell.visible = True
-                else: 
-                    if visibleNeighbors > 5: 
-                        currNewCell.visible = True         
-
-        hexNoiseMap = newMap
-        
-    return hexNoiseMap 
-
-# Generates random noise map based on density
-def generateHexNoiseMap(hexMap,density):
-    resultHexMap = hexMap
-    for hexList in resultHexMap:
-        for hex in hexList: 
-            rand = random.randint(1,100)
-            if rand < density: 
-                hex.visible = True
-            else: 
-                hex.visible = False
-    return resultHexMap
+    # Draw viruses
+    for virus in app.viruses: 
+        virus.drawVirus()
+        if virus in app.showVirusResources: 
+            virus.showResources()
     
-def getNoOfVisibleNeighbors(hexNoiseMap,row,col):
-    visibleNeighbors = 0
-    currHex = hexNoiseMap[row][col]
+    if app.notif != None: 
+        drawNotif(app)
 
-    adjacentHexes = getAdjacentHexes(hexNoiseMap,currHex)
-    for adjHex in adjacentHexes: 
-        if adjHex.visible == True: 
-            visibleNeighbors += 1  
-    return visibleNeighbors + (6 - len(adjacentHexes))
-
-
-def getResourceAndAmount(app):
-    abundance = app.resourceAbundance
-    resources = app.resources
-
-    chance = random.randint(1,100)
-    if chance < abundance: 
-        return random.choice(resources), abundance - chance // 10
-    else: 
-        return 0,0
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def generateCellTiles(app):
-    cellTiles = []
-    
-    # Placing sprites on screen
-    # for col in range(app.cellCols):
-    #     cellTileList = []
-    #     for row in range(app.cellRows):
-    #         originX = 1.5 * app.tileWidth
-    #         originY = 0.5 * app.tileHeight
-    #         isoX = originX + ((row - col) * app.tileWidth/2)
-    #         isoY = originY + ((col+row) * app.tileHeight/2)
-            
-    #         print("POS",row,col)
-    #         print("NEW",isoX,isoY)
-    #         print('---------')
-
-    #         currCellTile = cellTile(isoX,isoY,app.tileWidth)
-
-    #         if row == app.cellRows//2 and col == app.cellRows//2:
-    #             currCellTile.playerOwned = True
-    #         cellTileList.append(currCellTile)
-    #     cellTiles.append(cellTileList)
-
-
-    for row in range(app.cellRows):
-        cellTileList = []
-        for col in range(app.cellCols):
-
-            cartX = col * app.tileWidth/2 + app.cellMargin
-            cartY = row * app.tileHeight/2 
-            isoX, isoY = cartToIso(app,cartX,cartY)
-            # print("POS",row,col)
-            # print("OLD",cartX,cartY)
-            # print("NEW",isoX,isoY)
-            # print('---------')
-            
-            yOffset = 50
-            currCellTile = cellTile(isoX,isoY-yOffset,app.tileWidth)
-            if row == app.cellRows//2 and col == app.cellRows//2:
-                currCellTile.playerOwned = True
-
-
-            cellTileList.append(currCellTile)
-        cellTiles.append(cellTileList)
-
-    return cellTiles
-
-def isoToCart(app):
-    pass
-    # isoX = math.floor(isoX/app.tileWidth)
-    # isoY = math.floor(isoY/app.tileHeight)
-
+# Draws current cell player is on
 def drawCellView(app):
-    for cellTileList in app.cellTiles:
-        for tile in cellTileList:
-            tile.drawCellTileISO()
+    currCell = getCurrCell(app)
+    currCell.drawCell(app)
 
-            
-def cartToIso(app,cartX,cartY):
-    isoX = cartX - cartY
-    isoY = (cartX + cartY)/2
-    return isoX,isoY
+    # Draw organelle and shadow
+    if app.currPlacingOrganelle != None: 
+        app.currPlacingOrganelle.drawOrganelle()
 
-# Returns cx and cy of tile in isometric rendering
-def getISOCellBounds(app,row,col):
-    x = row * app.tileWidth 
-    y = col * app.tileHeight
-    isoX = (x - y) 
-    isoY = (x+y)/2 
-    return isoX,isoY
+    # Draw stats notifications
+    if app.updatedStatsNotif != None:
+        x,y,resource,amount = app.updatedStatsNotif
+        drawUpdatedStatsNotif(x,y,resource,amount*-1)
+
+    if app.notif != None: 
+        drawNotif(app)
+
+    # Draw failed placement notif
+    if app.placementFailedNotif != None: 
+        drawPlacementFailedNotif(app,app.placementFailedNotif)
+ 
+    if currCell.hex.meitosis: 
+        drawMeitosisAlert(app,currCell)
+
+
+
+### INITIALIAZING VARIABLES ###
+def initializeMapAndGame(app):
+    app.hexMap = generateAndProcessMapRegions(app)
+    app.playerCells = initializePlayerCells(app)
+    app.organelleOptions = initializeOrganelleOptions(app)
+    app.viruses = initializeViruses(app)
+    app.mapFill = getMapFill(app.hexMap)
+
+def initializePlayerCells(app):
+    cellCx, cellCy = app.width//2,app.height//2
+    cellWidth, cellHeight = CELLWIDTH,CELLHEIGHT
+    playerHex = initializePlayerHex(app.hexMap)
+    playerHex.playerOwned = True
+
+    currCellIdx = app.currCellIdx
+    currCell = Cell(cellCx,cellCy,cellWidth,cellHeight,playerHex,currCellIdx)
+
+    currCell.updateAreaOwned(app.hexMap)
+    currCell.initializeNucleus()
+
+    currCell.initializeResources() # Cell gets resources on tile it lands
+    return [currCell]
+
+# Picks random, visible player hex to start on
+def initializePlayerHex(hexMap):
+    while True: 
+        i = 0
+        chance = random.randint(0,len(hexMap)-1)
+        playerHex = hexMap[chance]
+        if playerHex.visible == True: 
+            return playerHex
+
+def initializeOrganelleOptions(app):
+    mitochondriaOption = Mitochondria(app.width - 550,app.height-70)
+    ERoption = ER(app.width - 450,app.height-70)
+    golgiBodyOption = golgiBody(app.width - 350,app.height-75)
+    centrosomeOption = Centrosome(app.width-220,app.height-60)
+
+    return [mitochondriaOption,ERoption,golgiBodyOption,centrosomeOption]
+
+def initializeViruses(app):
+    viruses = []
+    for i in range(app.virusNum):
+        while True: 
+            startHex = app.hexMap[random.randint(0,len(app.hexMap)-1)]
+            if isValidVirusStartHex(app.hexMap,startHex):
+                break
+
+        targetHex = pickRandomPlayerHex(app)
+        path = findBestPath(app.hexMap,startHex,targetHex)
+        path.reverse()
+        virus = Virus(startHex.x,startHex.y,path)
+        virus.showPath() # Briefly show path virus will take to your cell
+        viruses.append(virus)
+    return viruses
+
+def initializeHomeButtons(app):
+    playButton = Button(app.width/2,app.height/2 - 50,'play')
+    settingsButton = Button(app.width/2,app.height/2 + 20,'settings')
+    instructionsButton = Button(app.width/2,app.height/2 + 100,'instructions')
+    return [playButton,settingsButton,instructionsButton]
+
+def initializeSettingsButtons(app):
+    returnButton = Button(app.width/2,app.height - 150,'splashScreen')
+    adjustHexSize = settingsButton(app.width/2 + 40,230,'Hex Size')
+    adjustResourceAbundance = settingsButton(app.width/2 + 40,270,'Abundance')
+    adjustMapDensity = settingsButton(app.width/2 + 40,310,'Map Density')
+    adjustMapSmoothness = settingsButton(app.width/2 + 40,350,'Map Smoothness')
+
+
+    # adjustVirusSpeed = settingsButton(app.width/2 + 40, 500,'Virus Speed')
+    adjustVirusRespawnRate = settingsButton(app.width/2 + 40,500,'Respawn Rate')
+    returnButton.size = 20
+    return [adjustHexSize,returnButton,adjustResourceAbundance,adjustMapDensity,adjustMapSmoothness,adjustVirusRespawnRate]
+
+def initializeInstructionButtons(app):
+    returnButton = Button(app.width/2,app.height - 150,'splashScreen')
+    return [returnButton]
+
+
+# OTHER HELPERS
+def cellCanPerformMeitosis(app,cell):
+    if (cell.stats['Protein'] <= app.meitosisProteinReq
+        or cell.stats['ATP'] <= app.meitosisATPreq):
+            return False
+
+    # Check if centrosome is present
+    centrosomeFound = False
+    for organelle in cell.organelles: 
+        if isinstance(organelle,Centrosome):
+            centrosomeFound = True
+    return centrosomeFound
+
+def performMeitosis(app,clickedHex,mouseX,mouseY):
+    # Helper for updating meitosis stats
+    meitosisCell = app.meitosisCell
+    meitosisCell.hex.meitosis = False
+    meitosisCost = getMeitosisCost(meitosisCell.hex,mouseX,mouseY)
+    meitosisCell.stats['ATP'] -= (app.meitosisATPreq + meitosisCost)
+    meitosisCell.stats['Protein'] -= app.meitosisProteinReq
+
+    meitosisCell.hexRange = min(meitosisCell.hexRange+1, app.maxCellAreaRange)
+    meitosisCell.updateAreaOwned(app.hexMap)
+    
+    # Put in HELPERRR. Change initialize funtion to take hex
+    cellCx, cellCy = app.width//2,app.height//2
+    cellWidth, cellHeight = CELLWIDTH,CELLHEIGHT
+    playerHex = clickedHex
+    playerHex.playerOwned = True
+
+    app.currCellIdx += len(app.playerCells) - app.currCellIdx
+    print("Cell idx",app.currCellIdx)
+
+    currCell = Cell(cellCx,cellCy,cellWidth,cellHeight,playerHex, app.currCellIdx)
+    currCell.updateAreaOwned(app.hexMap)
+    currCell.initializeNucleus()
+    app.playerCells.append(currCell)
+
+    app.meitosisCell = None
+    app.meitosisView = False
+    app.mapFill = getMapFill(app.hexMap)
+
+def updateViruses(app):
+    i = 0
+    while i < len(app.viruses):
+        virus = app.viruses[i]
+        if virus.dead:
+            app.viruses.pop(i)
+        else:
+            # Show stats
+            if app.showVirusStats: 
+                app.showVirusResources.append(virus)
+            else: 
+                app.showVirusResources = []
+
+            if virus.infectedPlayer: 
+                infectedHex = virus.path[-1]
+
+                # Cell is dead
+                if hexDead(infectedHex,virus): 
+                    i = 0
+                    while i < len(app.playerCells):
+                        cell = app.playerCells[i]
+                        if cell.hex == infectedHex: 
+                            app.playerCells.pop(i)
+                        else: 
+                            i += 1
+                    if len(app.playerCells) == 0: 
+                        app.gameOver = True
+                else: 
+                    damage = getVirusDamage(virus)
+                    infectedHex.hexHealthIndex += damage
+                virus.dead = True
+
+            elif not virus.moving: 
+                time.sleep(1)
+                virus.hidePath()
+                virus.moving == True
+            virus.moveVirus()
+            i += 1
 
 
 
 def runYoukaryote():
-    runApp(1000, 700) 
+    runApp(SCREENWIDTH, SCREENHEIGHT) 
 
 runYoukaryote()
 
