@@ -3,6 +3,8 @@ Project Description:
 that the player has to build, micromanage, and improve for the goal of producing protein, 
 expanding and conquering the entire map. 
 
+Project Demo: https://youtu.be/Xu52OKtu7j4
+
 Project is ran by running main.py
 
 Default cmu_cs3_graphics library needs to be installed
