@@ -1,5 +1,4 @@
-
-from cmu_cs3_graphics import *
+from cmu_graphics import *
 import math, random, copy
 
 from classes import *

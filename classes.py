@@ -1,4 +1,4 @@
-from cmu_cs3_graphics import *
+from cmu_graphics import *
 from constants import *
 from drawings import *
 

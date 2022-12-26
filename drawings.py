@@ -1,4 +1,4 @@
-from cmu_cs3_graphics import *
+from cmu_graphics import *
 from constants import *
 import math, random
 
@@ -174,7 +174,7 @@ def drawProgressBar(app):
     drawRect(app.width//2 + 100, app.height - 65, progWidth * boxWidth,boxHeight,fill=fill)
 
     # Percent label
-    drawLabel(f"{round(progWidth*100)}%",app.width - 440,app.height-40,fill='white',bold=True,size=20)
+    drawLabel(f"{rounded(progWidth*100)}%",app.width - 440,app.height-40,fill='white',bold=True,size=20)
 
 
 # DRAW NOTIFICATIONS

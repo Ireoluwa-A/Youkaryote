@@ -1,4 +1,5 @@
-import math, copy, random
+import math, copy
+import random as rand
 
 from constants import *
 from drawings import *
@@ -106,7 +107,10 @@ def getCurrCell(app):
 
 # Picks random player Hex for virus to target
 def pickRandomPlayerHex(app):
-    idx = random.randint(0,len(app.playerCells)-1)
+    if len(app.playerCells)-1 == 0: 
+        idx = 0
+    else:
+        idx = rand.randrange(0,len(app.playerCells)-1)
     return app.playerCells[idx].hex
 
 # Checks if hex is owned by player

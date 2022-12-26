@@ -1,6 +1,7 @@
-
+from cmu_graphics import *
 from collections import deque
-import math, random, copy
+import math, copy
+import random as rand
 
 
 from classes import *
@@ -118,9 +119,9 @@ def getZCoord(xCoord,yCoord):
 def getResourceAndAmount(app):
     abundance = app.resourceAbundance
     resources = app.resources
-    chance = random.randint(1,100)
+    chance = rand.randrange(1,100)
     if chance < abundance: 
-        return random.choice(resources), abundance - chance // 10
+        return rand.choice(resources), abundance - chance // 10
     else: 
         return 0,0
 
@@ -147,8 +148,8 @@ def applyAutomata(hexNoiseMap,iterations):
 def generateHexNoiseMap(hexMap,density):
     # resultHexMap = hexMap
     for hex in hexMap:
-        rand = random.randint(1,100)
-        if rand < density: 
+        ran = rand.randrange(1,100)
+        if ran < density: 
             hex.visible = True
         else: 
             hex.visible = False
@@ -269,7 +270,7 @@ def getClosestHexes(hexMap,r1, r2):
 # Random.sample learned from: 
 # https://www.geeksforgeeks.org/python-random-sample-function/
 def getRandomHexInRegion(region):
-    hex = random.sample(region,1)[0]
+    hex = rand.sample(region,1)[0]
     return hex
 
 def getCheapestRegionEdge(edgeInfos):

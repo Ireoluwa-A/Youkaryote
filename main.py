@@ -1,5 +1,6 @@
-from cmu_cs3_graphics import *
-import math, random, copy
+from cmu_graphics import *
+import random as rand
+import copy
 from PIL import Image
 from collections import deque
 import sys
@@ -50,7 +51,8 @@ def onAppStart(app):
     app.hexAreaGrowthRate = 30 # seconds
 
     # Default resource variables
-    app.resourceAbundance = random.randint(40,60)
+    print(random, type(random))
+    app.resourceAbundance = rand.randrange(40,60)
     app.resources = ['ATP','Protein','Glucose']
     app.maxCellAreaRange = 5
         
@@ -413,7 +415,7 @@ def initializePlayerCells(app):
 def initializePlayerHex(hexMap):
     while True: 
         i = 0
-        chance = random.randint(0,len(hexMap)-1)
+        chance = rand.randrange(0,len(hexMap)-1)
         playerHex = hexMap[chance]
         if playerHex.visible == True: 
             return playerHex
@@ -430,7 +432,7 @@ def initializeViruses(app):
     viruses = []
     for i in range(app.virusNum):
         while True: 
-            startHex = app.hexMap[random.randint(0,len(app.hexMap)-1)]
+            startHex = app.hexMap[rand.randrange(0,len(app.hexMap)-1)]
             if isValidVirusStartHex(app.hexMap,startHex):
                 break
 
@@ -553,7 +555,7 @@ def runYoukaryote():
     runApp(SCREENWIDTH, SCREENHEIGHT) 
 
 runYoukaryote()
-
+cmu_graphics.run()
 
 
 
