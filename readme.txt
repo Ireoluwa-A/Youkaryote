@@ -3,9 +3,7 @@ Project Description:
 that the player has to build, micromanage, and improve for the goal of producing protein, 
 expanding and conquering the entire map. 
 
-Project is ran by running main.py
-
-Default cmu_cs3_graphics library needs to be installed
+Project is ran by running main.py.
 
 Useful shortcuts: 
 s - Gives more info (view useful cell, hex and organelle stats)
